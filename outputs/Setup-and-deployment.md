@@ -1,6 +1,6 @@
 # Bulls & Cows
 
-A responsive, one-versus-one web game. Static frontend, real browser-to-browser multiplayer, no player account or database required. Built with vanilla JavaScript, Vite, and PeerJS.
+A responsive browser game with online duels, nearby offline pairing, and 3–4 player tournaments. Static frontend, browser-to-browser multiplayer, no player account or application database required.
 
 ## Run the game
 
@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-Open http://127.0.0.1:5187. Create a room, then send its invite link or 8-character code to a friend. For remote play, both devices must load a publicly reachable **HTTPS** deployment. `localhost` only reaches the device it runs on. A development URL or localhost invite is not an internet deployment.
+Open http://127.0.0.1:5187. Choose a mode in the lobby. Online duels use a link/code; nearby rooms use QR offer/answer exchange on the same Wi‑Fi or hotspot; tournaments accept 3–4 players.
 
 ```sh
 npm test
@@ -21,17 +21,17 @@ npm run preview
 
 The production preview is http://127.0.0.1:5188/. The development server uses port 5187; both fail rather than silently switching ports. `npm run test:browser` targets the production preview by default. Install Playwright's test browser with `npx playwright install chromium` when needed, or pass `-- --executable /absolute/path/to/chromium` to the browser-test command.
 
-`dist/` is the complete static site. Relative asset URLs and hash-based invitations work at both `https://name.github.io/` and `https://name.github.io/repository/`. The app deliberately uses no server-rendered framework and requires no application backend for ordinary direct connections.
+`dist/` is the complete static site. Relative asset URLs and hash-based invitations work at both `https://name.github.io/` and `https://name.github.io/repository/`. The generated PWA service worker caches the app shell for nearby/offline launches.
 
 ## Rules used in this version
 
 These are implementation defaults chosen for a fair first version:
 
-- Exactly two players. Each chooses four distinct digits, from 0–9. A leading zero is allowed, so **0123** is valid and **0012** is not.
+- Online and nearby modes are two-player duels. Tournament mode accepts 3–4 players and runs round-robin pairings.
 - A bull is a correct digit in its correct position. A cow is a correct digit elsewhere. No digit counts twice.
-- Each attempt is simultaneous: both players commit a guess before either guess is exchanged or receives feedback. There is no speed advantage and no timer.
+- Each attempt is simultaneous: both players commit a guess before either guess is exchanged or receives feedback. Each player has a thinking clock that pauses when they lock.
 - When someone solves, that paired attempt completes for both players. One solver wins; two solvers tie. No extra unequal turns are allowed.
-- Ties require a tiebreaker. Both players opt in, choose different secrets from their previous round, and begin again at zero attempts. The same room can replay until someone wins. A normal rematch also requires new secrets.
+- Duels can rematch on a tie or award equal-attempt solves to the lower cumulative thinking time. Tournament ties count as draws for standings.
 - A repeated guess is rejected. There are 5,040 distinct valid codes. Rooms support up to 100 rounds; after that, create another room.
 
 ## How online play works (and what “free” means)

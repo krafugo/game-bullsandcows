@@ -53,7 +53,7 @@ try {
   await expect(b.locator('#digits-form label')).toHaveText('Your next guess');
   await submit(a,'9876');
   await expect(a.locator('.locked-guess')).toBeVisible();
-  await expect(b.locator('.opponent-status')).toContainText('Guess locked');
+  await expect(b.locator('.opponent-status')).toContainText('Played · waiting for you');
   expect(await b.locator('.small-tiles').innerText()).not.toContain('0123');
   await submit(b,'9012');
   await expect(a.locator('tbody tr')).toHaveCount(1);

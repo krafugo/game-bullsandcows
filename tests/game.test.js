@@ -109,3 +109,21 @@ test('tampered feedback cannot produce a verified victory', async () => {
   await assert.rejects(a.receive(forged), /feedback does not match/);
   assert.equal(a.view().verified,false);
 });
+
+test('speed tie-breaker selects the player with less thinking time', async () => {
+  const a = new Game('TIME', null, () => {}, { tieRule: 'time' });
+  const b = new Game('TIME', null, () => {}, { tieRule: 'time' });
+  const settle = async () => { for (let i = 0; i < 10; i++) { await a.receive(b.snapshot()); await b.receive(a.snapshot()); } };
+  await a.lockSecret('0123'); await b.lockSecret('5678'); await settle();
+  await a.lockGuess('9876', 1200); await b.lockGuess('9012', 2400); await settle();
+  await a.lockGuess('5678', 800); await b.lockGuess('0123', 1800); await settle();
+  assert.equal(a.view().outcome, 'win'); assert.equal(b.view().outcome, 'loss');
+  assert.equal(a.view().timedDecision, true); assert.equal(a.view().ownTime, 2000); assert.equal(a.view().otherTime, 4200);
+});
+
+test('a timed commitment cannot be changed after the move is sent', async () => {
+  const { a, b, settle } = await pair();
+  await a.lockSecret('0123'); await b.lockSecret('5678'); await settle();
+  await a.lockGuess('9876', 1234); await b.receive(a.snapshot()); const forged = a.snapshot(); forged[0].turns[0].timeMs = 1;
+  await assert.rejects(b.receive(forged), /does not match/);
+});

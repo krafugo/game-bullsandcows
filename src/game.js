@@ -28,8 +28,9 @@ function validateRound(r) {
   assert(!r.secretReveal || proof(r.secretReveal));
   assert(r.next === undefined || r.next === true);
   for (const t of r.turns) {
-    assert(t && Object.keys(t).every(k => ['commit', 'reveal', 'feedback'].includes(k)));
+    assert(t && Object.keys(t).every(k => ['commit', 'reveal', 'feedback', 'timeMs'].includes(k)));
     assert(!t.commit || hash(t.commit));
+    assert(t.timeMs === undefined || (Number.isInteger(t.timeMs) && t.timeMs >= 0 && t.timeMs <= 86400000));
     assert(!t.reveal || proof(t.reveal));
     assert(!t.feedback || result(t.feedback));
   }
@@ -38,10 +39,11 @@ function validateRound(r) {
 // Each player publishes only append-only public state. Private values stay on that
 // device until the relevant simultaneous reveal; secrets reveal only at round end.
 export class Game {
-  constructor(room, saved, onChange = () => {}) {
+  constructor(room, saved, onChange = () => {}, options = {}) {
     this.room = room;
     this.data = saved || { own: [{ turns: [] }], other: [{ turns: [] }], private: [{}] };
     this.onChange = onChange;
+    this.tieRule = options.tieRule === 'time' ? 'time' : 'rematch';
     this.queue = Promise.resolve();
     this.error = '';
   }
@@ -83,17 +85,19 @@ export class Game {
       this.own.secretCommit = await commitment(this.room, this.round, 'secret', value, this.private.secret.salt);
     });
   }
-  lockGuess(value) {
+  lockGuess(value, timeMs = 0) {
     return this.task(async () => {
       const v = this.view();
       assert(validNumber(value), 'Enter four different digits, from 0 to 9.');
+      assert(Number.isInteger(timeMs) && timeMs >= 0 && timeMs <= 86400000, 'The turn timer is invalid.');
       assert(v.ready && !v.ended && !v.locked, 'Wait for the next guess.');
       assert(!this.own.turns.some(t => t.reveal?.value === value), 'You already tried that number. Try a different one.');
       const n = v.attempt - 1;
       const p = { value, salt: randomHex() };
       (this.private.guesses ||= [])[n] = p;
       this.own.turns[n] ||= {};
-      this.own.turns[n].commit = await commitment(this.room, this.round, `guess:${n}`, value, p.salt);
+      this.own.turns[n].timeMs = timeMs;
+      this.own.turns[n].commit = await commitment(this.room, this.round, `guess:${n}`, `${value}:${timeMs}`, p.salt);
     });
   }
   nextRound() {
@@ -113,15 +117,24 @@ export class Game {
       history.push({ guess: x.reveal.value, ...y.feedback, opponent: x.feedback });
       if (x.feedback.bulls === 4 || y.feedback.bulls === 4) {
         ended = true;
-        outcome = x.feedback.bulls === y.feedback.bulls ? 'tie' : y.feedback.bulls === 4 ? 'win' : 'loss';
+        if (x.feedback.bulls !== y.feedback.bulls) outcome = y.feedback.bulls === 4 ? 'win' : 'loss';
+        else if (this.tieRule === 'time') {
+          const ownTime = a.turns.reduce((sum, turn) => sum + (turn.timeMs || 0), 0);
+          const otherTime = b.turns.reduce((sum, turn) => sum + (turn.timeMs || 0), 0);
+          outcome = ownTime === otherTime ? 'tie' : ownTime < otherTime ? 'win' : 'loss';
+        } else outcome = 'tie';
         break;
       }
     }
     const n = history.length;
+    const ownTime = a.turns.reduce((sum, turn) => sum + (turn.timeMs || 0), 0);
+    const otherTime = b.turns.reduce((sum, turn) => sum + (turn.timeMs || 0), 0);
+    const bothSolved = a.turns.some(turn => turn.feedback?.bulls === 4) && b.turns.some(turn => turn.feedback?.bulls === 4);
     return { round: this.round + 1, ready: !!(a.secretCommit && b.secretCommit), secretLocked: !!a.secretCommit,
       otherSecretLocked: !!b.secretCommit, history, attempt: n + 1, locked: !!a.turns[n]?.commit,
       otherLocked: !!b.turns[n]?.commit, ended, outcome, verified: ended && !!this.verifiedRound,
-      ownNext: !!a.next, otherNext: !!b.next, otherSecret: ended && this.verifiedRound ? b.secretReveal?.value : null };
+      ownNext: !!a.next, otherNext: !!b.next, otherSecret: ended && this.verifiedRound ? b.secretReveal?.value : null,
+      ownTime, otherTime, tieRule: this.tieRule, timedDecision: bothSolved && this.tieRule === 'time' && ownTime !== otherTime };
   }
   async audit() {
     const a = this.own, b = this.other;
@@ -133,7 +146,8 @@ export class Game {
       if (n) assert(a.turns[n - 1]?.feedback && b.turns[n - 1]?.feedback);
       if (y.reveal) {
         assert(x.commit && y.commit);
-        assert(await commitment(this.room, this.round, `guess:${n}`, y.reveal.value, y.reveal.salt) === y.commit, 'Your friend’s locked guess changed. This round cannot count.');
+        assert(Number.isInteger(y.timeMs));
+        assert(await commitment(this.room, this.round, `guess:${n}`, `${y.reveal.value}:${y.timeMs}`, y.reveal.salt) === y.commit, 'Your friend’s locked guess or time changed. This round cannot count.');
       }
       if (y.feedback) assert(x.reveal);
       if (x.feedback && y.feedback) ended = x.feedback.bulls === 4 || y.feedback.bulls === 4;

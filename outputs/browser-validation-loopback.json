@@ -1,5 +1,5 @@
 {
-  "started": "2026-09-13T04:50:33.614Z",
+  "started": "2026-09-13T07:38:54.684Z",
   "url": "http://127.0.0.1:5188/",
   "mode": "Test-only loopback ICE with fake media permission; actual PeerJS signaling and WebRTC data channel",
   "checks": [
