@@ -1,0 +1,17 @@
+{
+  "started": "2026-09-13T04:50:33.614Z",
+  "url": "http://127.0.0.1:5188/",
+  "mode": "Test-only loopback ICE with fake media permission; actual PeerJS signaling and WebRTC data channel",
+  "checks": [
+    "Lobby at 360, 390, 768, 1440 pixels; rules dialog and Escape",
+    "Two independent contexts connected through public PeerJS signaling and real WebRTC",
+    "Invalid secret rejected, leading-zero secret accepted, no early feedback, paired attempt history",
+    "Third player refused",
+    "Guest refresh/resume preserved history; tied result verified",
+    "Tiebreaker requires new secrets; verified winner and loser after equal attempts",
+    "Leave confirmation cancel and leave notification"
+  ],
+  "limitation": "Separate browser contexts on one computer. This is not proof of two physical phones or different mobile networks.",
+  "signalingConnections": 4,
+  "status": "passed"
+}

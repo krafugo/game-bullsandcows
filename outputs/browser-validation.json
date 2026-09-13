@@ -1,0 +1,11 @@
+{
+  "started": "2026-09-13T04:46:39.682Z",
+  "url": "http://127.0.0.1:5188/",
+  "checks": [
+    "Lobby at 360, 390, 768, 1440 pixels; rules dialog and Escape"
+  ],
+  "limitation": "Separate browser contexts on one computer. This is not proof of two physical phones or different mobile networks.",
+  "status": "failed",
+  "error": "expect(locator).toContainText(expected) failed\n\nLocator: locator('.connection-banner')\nExpected substring: \"Both players connected\"\nReceived string:    \"Your friend hasn’t connected yet. Keep both screens open, check the code, or try another network.Retry\"\nTimeout: 60000ms\n\nCall log:\n  - Expect \"toContainText\" locator('.connection-banner') with timeout 60000ms\n  - waiting for locator('.connection-banner')\n    45 × locator resolved to <div role=\"status\" class=\"connection-banner \">…</div>\n       - unexpected value \"Room open · invite your friend\"\n    78 × locator resolved to <div role=\"status\" class=\"connection-banner \">…</div>\n       - unexpected value \"Your friend hasn’t connected yet. Keep both screens open, check the code, or try another network.Retry\"\n",
+  "browserErrors": []
+}
