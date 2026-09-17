@@ -35,44 +35,11 @@ These are implementation defaults chosen for a fair first version:
 - Tournament mode accepts 3–4 total players and runs a round-robin schedule. Four-player rounds have two simultaneous matches; a host browser coordinates the roster, match routing, and standings. Tournament ties are scored as draws and the table ranks by points, wins, attempts, and time.
 - A repeated guess is rejected. There are 5,040 distinct valid codes. Rooms support up to 100 rounds; after that, create another room.
 
-## How online play works (and what “free” means)
+## How online play works (and what "free" means)
 
-GitHub Pages only serves the website's HTML, CSS, and JavaScript. It does not run a game server. PeerJS's public PeerServer performs connection discovery and WebRTC signaling without requiring an account. The two browsers then exchange game state over a reliable, encrypted WebRTC data channel.
+GitHub Pages only serves the website's HTML, CSS, and JavaScript. Online duels use **[peer-room](https://github.com/krafugo/peer-room)**: a WebRTC data channel between the two browsers when a direct path exists (PeerJS signalling, a pool of free STUN servers, optional probed TURN relays), and an encrypted store-and-forward relay over public MQTT brokers when it does not — symmetric NATs, VPNs, mobile carriers. Your seat lives in this browser's storage, so a refresh, a killed tab or reopening the room link rejoins the same game, and a guess made while your friend is offline is delivered the moment they come back. The banner shows the path in use (**P2P** or **Relay**).
 
-The default uses Google's public STUN server and the public PeerJS signaling service. **There is no TURN relay included by default.** Some carrier-grade NATs, corporate networks, firewalls, and combinations of mobile networks cannot establish a direct connection. Trying another Wi-Fi/mobile network may help; dependable operation across those networks requires a TURN relay.
-
-### Nearby offline pairing
-
-Install the app from the HTTPS Pages URL (or open it once while online) so the PWA cache contains the game files. Put both devices on the same Wi‑Fi network or one device's hotspot, choose **Nearby offline**, and exchange the compressed WebRTC offer and answer by QR code. A copy/paste fallback is included for devices without a camera. The pairing bundle contains connection metadata only; game messages then use a direct local encrypted data channel. Guest Wi‑Fi isolation, VPNs, and device firewalls can still prevent a local route.
-
-PeerJS discontinued its free TURN service in December 2023. Do not interpret old documentation claiming free TURN as current. Public signaling/STUN are external shared services and can be blocked, slow, unavailable, or change policy. This project has no uptime or capacity guarantee from them and makes no claim of unlimited free production service.
-
-### Optional TURN relay
-
-Edit `public/connection-config.js`. Keep the existing STUN server and configure a URL you operate that returns short-lived browser-usable ICE credentials:
-
-```js
-window.BC_CONNECTION = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-  turnCredentialEndpoint: 'https://your-service.example/ice',
-};
-```
-
-The endpoint must allow CORS from the game's origin and return JSON shaped like:
-
-```json
-{
-  "iceServers": [{
-    "urls": ["turns:your-relay.example:443?transport=tcp"],
-    "username": "short-lived-username",
-    "credential": "short-lived-credential"
-  }]
-}
-```
-
-The relay credential endpoint and TURN service are optional external infrastructure, not included or deployed by this repository. They need their own access controls/rate limits, and provider free quotas may be limited. Do not embed a private provider API key or a permanent privileged credential in static JavaScript or a Vite environment variable: all client code is public. The app fetches fresh credentials whenever a room session starts or resumes. A long-lived room may need a refresh/resume when its relay credentials expire.
-
-For relay-only verification, temporarily set `iceTransportPolicy: 'relay'` alongside these settings, then restore it after testing. A custom PeerServer can be configured using `peerServer: { host, port: 443, path: '/', secure: true }`.
+Tournaments and nearby (QR) play keep their original transports. `public/connection-config.js` documents the STUN, TURN, broker and PeerServer options; all defaults are shared public services with no uptime guarantee from this project. Never embed a private API key in that file: all client code is public.
 
 ## Publish free on GitHub Pages
 
@@ -88,7 +55,7 @@ The included workflow uses standard GitHub Pages actions and a restricted deploy
 ## Recovery, privacy, and fair play
 
 - Both participants should keep the game tab open. Brief interruptions trigger retries; returning to the tab also retries. Paired attempts pause instead of awarding a disconnect win.
-- Session state, including **your own secret**, is saved only in that tab's `sessionStorage`. After a refresh, choose **Resume**. Clearing storage, closing the tab, using another device, or leaving the room can lose the session. Browser storage restrictions are reported in the UI.
+- Session state, including **your own secret**, is saved in this browser's `localStorage` (seven days). A refresh or the room link rejoins the same seat; another device cannot, because it does not hold your salts. Only **Leave room** forgets it. Browser storage restrictions are reported in the UI.
 - A duel room has one host and one guest. A tournament has 3–4 seats and the host remains the coordinator. Once connected, unguessable resume tokens pin seats; other players are refused. The 8-character room code is an invitation, not a user login.
 - WebRTC reveals network addresses to the other peer and uses external signaling/STUN services. There is no analytics or application database. Fonts load from Google Fonts with system fallbacks.
 - A secret is committed as SHA-256 with a random 128-bit salt; the salt prevents trivially enumerating all four-digit codes. Guesses use fresh salted commitments too. After both guesses lock, only their guesses and feedback are exchanged. The opponent's UI shows progress without displaying their in-progress guesses or secret.
