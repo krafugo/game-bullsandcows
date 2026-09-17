@@ -1,6 +1,6 @@
 {
   "name": "bulls-and-cows",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "fflate": "^0.8.3",
+    "peer-room": "github:krafugo/peer-room#v1.0.1",
     "peerjs": "1.5.5",
     "qr-scanner": "^1.4.2",
     "qrcode": "^1.5.4"

@@ -3,16 +3,18 @@ import QRCode from 'qrcode';
 import QrScanner from 'qr-scanner';
 import { registerSW } from 'virtual:pwa-register';
 import { Game } from './game.js';
-import { createSession, normalizeCode, validCode, RoomConnection, TournamentConnection, connectionOptions } from './network.js';
+import { APP, OnlineDuel, createSession, normalizeCode, validCode, TournamentConnection, connectionOptions } from './network.js';
+import { SeatStore, createSeat, roomFromHash } from 'peer-room';
 import { NearbyConnection } from './nearby.js';
 import { memberName, roundComplete, standings } from './tournament.js';
 
 registerSW({ immediate: true });
 
 const root = document.querySelector('#app');
-const storageKey = 'bulls-cows-session-v2';
 const linkParams = new URLSearchParams(location.hash.slice(1));
-let session = null, game = null, network = null, state = 'home', status = '', message = '', fatal = '', busy = false;
+// Dev only: `#seat=<name>` keeps two seats of the same browser apart while testing.
+const storageKey = 'bulls-cows-session-v2' + (import.meta.env.DEV && linkParams.get('seat') ? ':' + linkParams.get('seat') : '');
+let session = null, game = null, network = null, state = 'home', status = '', path = 'none', message = '', fatal = '', busy = false;
 let joining = !!linkParams.get('room');
 let selectedFormat = linkParams.get('mode') === 'tournament' ? 'tournament' : 'duel';
 let connectionKind = 'online', tieRule = linkParams.get('tie') === 'time' ? 'time' : 'rematch';
@@ -20,8 +22,14 @@ let draftName = '', draftCode = linkParams.get('room') || '', draftDigits = '';
 let showSecret = false, rulesOpen = false, leaveOpen = false, scanOpen = false, lastSent = '', storageWarning = '';
 let pairingPayload = '', qrScanner = null, tournament = null, activeMatchId = null;
 let clock = { key: '', base: 0, startedAt: null };
+// The seat lives in localStorage so a killed tab or a reopened room link rejoins the same game.
+const storage = SeatStore.pick();
+const SEAT_TTL = 7 * 24 * 60 * 60 * 1000;
 let resume = null;
-try { const raw = JSON.parse(sessionStorage.getItem(storageKey)); if (raw?.version === 2 && validCode(raw.code) && ['host', 'guest'].includes(raw.role) && raw.token) resume = raw; } catch {}
+try {
+  const raw = JSON.parse(storage?.getItem(storageKey) ?? sessionStorage.getItem(storageKey));
+  if (raw?.version === 2 && validCode(raw.code) && ['host', 'guest'].includes(raw.role) && raw.token && Date.now() - (raw.savedAt ?? Date.now()) < SEAT_TTL) resume = raw;
+} catch {}
 
 const e = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 const arrow = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -52,7 +60,8 @@ function persist() {
     else session.game = game.saved();
   }
   if (tournament) session.tournament = tournament;
-  try { sessionStorage.setItem(storageKey, JSON.stringify(session)); }
+  session.savedAt = Date.now();
+  try { (storage ?? sessionStorage).setItem(storageKey, JSON.stringify(session)); }
   catch { storageWarning = 'This browser can’t save your game. Keep this tab open; refreshing will lose your place.'; }
 }
 function sync(force = false) {
@@ -101,14 +110,18 @@ async function start(role, existing = null) {
   if (!existing && role === 'guest' && kind === 'online' && !validCode(code)) { message = 'Enter the 8-character room code from your friend.'; render(); document.querySelector('#room-code')?.focus(); return; }
   busy = true; message = ''; render();
   try {
-    const options = kind === 'online' ? await connectionOptions() : null;
+    const options = kind === 'online' && format === 'tournament' ? await connectionOptions() : null;
     session = existing || createSession(role, draftName, role === 'guest' && kind === 'online' ? code : undefined, { format, connectionKind: kind, tieRule: format === 'tournament' ? 'time' : tieRule });
+    if (format === 'duel' && kind === 'online' && !session.seat) {
+      session.seat = await createSeat(APP, session.role, session.name, session.code, role === 'host' ? { tieRule: session.tieRule } : undefined);
+      session.token = session.seat.token;
+    }
     selectedFormat = session.format; connectionKind = session.connectionKind; tieRule = session.tieRule;
     tournament = session.tournament || null;
     state = kind === 'nearby' ? 'pairing' : 'connecting'; status = kind === 'nearby' ? 'Preparing nearby pairing…' : 'Opening a connection…';
     if (format === 'duel' && !(kind === 'nearby' && role === 'guest')) ensureGame(session.code, session.game);
     const callbacks = {
-      status(kindState, text) { state = kindState; status = text; reconcileClock(); render(); },
+      status(kindState, text, via = 'none') { state = kindState; status = text; path = via; reconcileClock(); render(); },
       configured(config) { configureSession(config); },
       pairing(payload) { pairingPayload = payload; render(); },
       ready(remote) { configureSession({ remoteName: String(remote?.name || session.remoteName || 'Player').slice(0, 20), remoteToken: remote?.token || session.remoteToken }); state = 'connected'; reconcileClock(); persist(); sync(true); render(); },
@@ -118,14 +131,16 @@ async function start(role, existing = null) {
     };
     if (format === 'tournament') network = new TournamentConnection(session, callbacks, options);
     else if (kind === 'nearby') network = new NearbyConnection(session, callbacks);
-    else network = new RoomConnection(session, callbacks, options);
+    else network = new OnlineDuel(session, callbacks, { transports: import.meta.env.DEV && linkParams.get('transport') === 'local' ? { local: true, direct: false, relay: false } : undefined });
     persist();
+    if (format === 'duel' && kind === 'online') { sync(true); window.history.replaceState(null, '', new URL(inviteURL()).hash); }
   } catch (err) { message = err.message || 'Couldn’t open the room. Please try again.'; if (!network) { session = null; game = null; state = 'home'; } }
   busy = false; render();
 }
 
 function inviteURL() {
   const url = new URL(location.href), params = new URLSearchParams({ room: session.code });
+  if (import.meta.env.DEV && linkParams.get('seat')) params.set('seat', linkParams.get('seat'));
   if (session.format === 'tournament') params.set('mode', 'tournament');
   if (session.tieRule === 'time') params.set('tie', 'time');
   url.hash = params.toString(); return url.href;
@@ -145,7 +160,7 @@ function home() {
     ${resume ? `<div class="resume"><div><strong>Your room is still here</strong><p>${e(resume.code)} · ${e(resume.name)}</p></div><button class="button small" data-action="resume">Resume ${arrow}</button></div>` : ''}
     <div class="mode-picker" aria-label="Game mode"><button data-action="mode-online" class="${!nearby && !tournamentMode ? 'selected' : ''}"><strong>Online duel</strong><span>Simple room code</span></button><button data-action="mode-nearby" class="${nearby ? 'selected' : ''}"><strong>Nearby offline</strong><span>Same Wi‑Fi + QR</span></button><button data-action="mode-tournament" class="${tournamentMode ? 'selected' : ''}"><strong>Tournament</strong><span>3–4 players</span></button></div>
     <div class="tabs" role="tablist" aria-label="Choose how to play"><button id="create-tab" role="tab" aria-selected="${!joining}" tabindex="${joining ? -1 : 0}" data-action="create-tab">Create a room</button><button id="join-tab" role="tab" aria-selected="${joining}" tabindex="${joining ? 0 : -1}" data-action="join-tab">Join friends</button></div>
-    <form id="play-form"><label for="player-name">Your name <span>optional</span></label><input id="player-name" name="name" autocomplete="nickname" maxlength="20" placeholder="What should we call you?" value="${e(draftName)}" />${joining && !nearby ? `<label for="room-code">Room code</label><input id="room-code" class="code-input" name="room" autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="12" placeholder="ABCD EFGH" value="${e(draftCode)}" required />` : ''}${!joining && !tournamentMode ? `<label for="tie-rule">If both solve together</label><select id="tie-rule" name="tieRule"><option value="rematch" ${tieRule === 'rematch' ? 'selected' : ''}>Play a tiebreaker round</option><option value="time" ${tieRule === 'time' ? 'selected' : ''}>Lower thinking time wins</option></select>` : ''}<button class="button primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Connecting…' : joining ? nearby ? 'Pair with the host' : tournamentMode ? 'Join tournament' : 'Join the game' : tournamentMode ? 'Create tournament' : nearby ? 'Create nearby room' : 'Create a room'} ${arrow}</button><p class="form-note">${nearby ? 'Open the cached app on both devices and connect them to the same Wi‑Fi or hotspot.' : tournamentMode ? 'Invite 2–3 friends. The host stays online to coordinate all matches.' : 'Invite one friend with a link or room code.'}</p></form>
+    <form id="play-form"><label for="player-name">Your name <span>optional</span></label><input id="player-name" name="name" autocomplete="nickname" maxlength="20" placeholder="What should we call you?" value="${e(draftName)}" />${joining && !nearby ? `<label for="room-code">Room code</label><input id="room-code" class="code-input" name="room" autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="12" placeholder="ABCD EFGH" value="${e(draftCode)}" required />` : ''}${!joining && !tournamentMode ? `<label for="tie-rule">If both solve together</label><select id="tie-rule" name="tieRule"><option value="rematch" ${tieRule === 'rematch' ? 'selected' : ''}>Play a tiebreaker round</option><option value="time" ${tieRule === 'time' ? 'selected' : ''}>Lower thinking time wins</option></select>` : ''}<button class="button primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Connecting…' : joining ? nearby ? 'Pair with the host' : tournamentMode ? 'Join tournament' : 'Join the game' : tournamentMode ? 'Create tournament' : nearby ? 'Create nearby room' : 'Create a room'} ${arrow}</button><p class="form-note">${nearby ? 'Open the cached app on both devices and connect them to the same Wi‑Fi or hotspot.' : tournamentMode ? 'Invite 2–3 friends. The host stays online to coordinate all matches.' : 'Invite one friend with a link or room code.'}</p><div class="message ${message ? '' : 'empty'}" role="alert">${e(message)}</div></form>
   </div><div class="lobby-meta"><span>Encrypted P2P</span><span>Equal turns</span><span>${tournamentMode ? 'Round robin' : 'No account'}</span></div></section>
   <aside class="intro-aside"><div class="sample-board"><div class="board-top"><span class="eyebrow">THE CODE IS THE CHALLENGE</span>${lock}</div>${tiles('1234')}<div class="sample-divider"></div><div class="sample-row"><span>A guess</span><span class="sample-number">1356</span></div><div class="sample-feedback"><div><b>1<span class="square-symbol">■</span></b><span>Bull · right place</span></div><div><b>1<span class="circle-symbol">●</span></b><span>Cow · wrong place</span></div></div></div><div class="quick-rules"><span class="eyebrow">NEW WAYS TO PLAY</span><h2>Across the world.<br>Or across the table.</h2><p>Online duels use public signaling. Nearby rooms exchange WebRTC details by QR and then stay on your local network.</p><button class="text-button" data-action="rules">The full rules <span>↗</span></button></div></aside></div>`;
 }
@@ -216,7 +231,7 @@ function gameRoom() {
 }
 
 function room() {
-  const top = `<div class="room-heading"><div><span class="eyebrow">${session.format === 'tournament' ? 'TOURNAMENT' : session.connectionKind === 'nearby' ? 'NEARBY' : 'ROOM'}</span><button class="room-pill" data-action="${session.connectionKind === 'nearby' ? 'noop' : 'copy'}">${e(session.code.slice(0, 4))} ${e(session.code.slice(4))}<span>↗</span></button></div><button class="text-button muted" data-action="leave">Leave room</button></div><div class="connection-banner ${state === 'connected' ? 'connected' : ''}" role="status"><span class="connection-dot"></span><span>${e(status)}</span></div>${storageWarning ? `<div class="message">${e(storageWarning)}</div>` : ''}`;
+  const top = `<div class="room-heading"><div><span class="eyebrow">${session.format === 'tournament' ? 'TOURNAMENT' : session.connectionKind === 'nearby' ? 'NEARBY' : 'ROOM'}</span><button class="room-pill" data-action="${session.connectionKind === 'nearby' ? 'noop' : 'copy'}">${e(session.code.slice(0, 4))} ${e(session.code.slice(4))}<span>↗</span></button></div><button class="text-button muted" data-action="leave">Leave room</button></div><div class="connection-banner ${state === 'connected' ? 'connected' : state === 'waiting' && path === 'relay' && session.remoteToken ? 'stored' : ''}" role="status"><span class="connection-dot"></span><span>${e(status)}</span>${path !== 'none' ? `<span class="path-badge">${path === 'direct' ? 'P2P' : 'Relay'}</span>` : ''}</div>${storageWarning ? `<div class="message">${e(storageWarning)}</div>` : ''}`;
   if (session.connectionKind === 'nearby' && state !== 'connected') return top + pairingBox();
   if (session.format === 'tournament' && (!tournament?.started || tournament.complete || !game)) return top + tournamentLobby();
   return top + gameRoom();
@@ -262,9 +277,9 @@ async function openScanner() {
 function leaveRoom() {
   closeScanner(); network?.close();
   session = null; game = null; network = null; tournament = null; activeMatchId = null; pairingPayload = '';
-  state = 'home'; status = ''; message = ''; fatal = ''; leaveOpen = false; showSecret = false; lastSent = '';
+  state = 'home'; status = ''; path = 'none'; message = ''; fatal = ''; leaveOpen = false; showSecret = false; lastSent = '';
   clock = { key: '', base: 0, startedAt: null };
-  try { sessionStorage.removeItem(storageKey); } catch {}
+  try { storage?.removeItem(storageKey); sessionStorage.removeItem(storageKey); } catch {}
   window.history.replaceState(null, '', location.pathname + location.search); render();
 }
 
@@ -328,3 +343,5 @@ document.addEventListener('keydown', event => {
 window.addEventListener('beforeunload', () => { reconcileClock(); persist(); });
 
 render();
+// Opening the room's own link (a reload, a killed tab, a phone coming back) rejoins the saved seat straight away.
+if (resume && roomFromHash() && roomFromHash() === resume.code) void start(resume.role, resume);
